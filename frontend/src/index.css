@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme {
+  --color-court: #0f0f10;
+  --color-surface: #1a1a1b;
+  --color-border: #2a2a2b;
+  --color-accent: var(--team-accent, #552583);
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-court);
+    color: white;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@utility scrollbar-hide {
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
