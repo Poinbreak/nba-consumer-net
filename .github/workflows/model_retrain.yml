@@ -1,0 +1,31 @@
+name: Model Retraining Pipeline
+on:
+  schedule:
+    - cron: '0 0 * * 1'      # Every Monday at midnight
+  workflow_dispatch:
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Retrain Game Model
+        run: python backend/ml/train_game_model.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      - name: Retrain Player Props Model
+        run: python backend/ml/train_player_props.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      - name: Retrain Awards Model
+        run: python backend/ml/train_awards.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
