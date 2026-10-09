@@ -20,7 +20,7 @@ from award_features import AWARDS, FEATS, award_pool, build_features  # noqa: E4
 from features import connect  # noqa: E402
 
 MODEL_DIR = os.path.dirname(__file__)
-REGULAR = "('Regular Season','NBA Emirates Cup','Emirates NBA Cup')"
+REGULAR = "('Regular Season','NBA Emirates Cup')"   # the Cup final ('Emirates NBA Cup') does not count toward records
 SEASON = "(EXTRACT(YEAR FROM (game_date - INTERVAL '6 months'))::int + 1)"
 
 

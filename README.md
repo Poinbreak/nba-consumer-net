@@ -1,92 +1,80 @@
-# NBA Consumer Net
+# NBA·NET
 
-A full-stack NBA analytics platform with real-time game predictions, player props, and trade machine simulation.
+NBA stats you can ask questions of, model predictions you can check, and a GM mode where trades change the projections.
 
-## Features
+## What's in it
 
-- **Real-time Game Tracking**: WebSocket-based live score updates
-- **Predictive Models**: ML-powered game predictions and player prop predictions
-- **Trade Machine**: Simulate team trades with win probability impact
-- **Player Statistics**: Comprehensive player and team statistics
-- **Bet Tracking**: Track and analyze betting predictions
-- **Win Probability Graphs**: Visual win probability forecasting
+| Area | What it does |
+|---|---|
+| **Ask** | Search box that answers plain-English stat questions ("Luka last 10 games", "most assists this season", "Jokic vs Lakers") from our own database |
+| **Players / Teams** | StatMuse-style pages: season-by-season stats, game logs, contracts, injuries, rosters, schedules |
+| **Predict** | Win probability + reasons for every upcoming game, MVP / DPOY / ROY / 6MOY / MIP races, simulated title odds |
+| **Odds** | Live sportsbook moneylines next to our model's probability |
+| **GM Mode** | Pick a team, make CBA-checked trades with real contracts, see projected record and off/def/net rating, simulate the season |
 
-## Stack
+## Models (all trained on our data, all backtested)
 
-### Backend
-- **Framework**: Django + Django Channels (WebSocket support)
-- **Database**: Supabase (PostgreSQL)
-- **ML**: Python (scikit-learn, TensorFlow)
-- **API**: RESTful + WebSocket
+| Model | Method | Held-out result |
+|---|---|---|
+| Game outcome | XGBoost on point-in-time rolling form + Elo + rest | 67% accuracy on 2025-26 (home-team baseline 56%) |
+| Awards | XGBoost on Basketball-Reference voting history (Kaggle), per-season z-scored stats | MVP winner ranked #1 in 4 of 6 seasons, top 3 in 6 of 6; DPOY and MIP are weak |
+| Season / title odds | Monte Carlo (5,000 sims) over the real schedule + play-in + best-of-7 series | n/a |
+| Roster strength (GM) | Minutes-weighted Game Score/36 → team rating, calibrated by projecting each team's next season from prior-season player stats | correlation 0.52 with real next-season net rating |
 
-### Frontend
-- **Framework**: React 18 + Vite
-- **Styling**: Tailwind CSS
-- **State Management**: Custom hooks (React)
-- **Real-time**: WebSocket integration
+Limits worth knowing: ratings don't yet see injuries during a season or offseason context beyond rosters; box scores can't see defense, so GM-mode defensive projections vary little between teams; GM trade *changes* are more reliable than absolute numbers.
 
-### Data
-- **ETL**: CSV ingestion from Kaggle
-- **ML Models**: Trained on historical NBA data
-- **Features**: Player stats, team statistics, game outcomes
-
-## Project Structure
+## Architecture
 
 ```
-├── backend/          # Django application
-│   ├── api/         # Main API endpoints & WebSocket consumers
-│   ├── ml/          # Machine learning models
-│   ├── etl/         # Data ingestion scripts
-│   ├── scripts/     # Utility scripts
-│   ├── data/        # CSV data files (not tracked in git)
-│   └── nba_net/     # Django settings
-├── frontend/        # React application
-│   ├── src/
-│   │   ├── components/  # React components
-│   │   ├── pages/       # Page components
-│   │   ├── hooks/       # Custom React hooks
-│   │   └── assets/
-│   └── vite.config.js
-└── supabase/        # Database migrations
+ESPN public JSON ──► backend/scripts/sync_scores.py, sync_rosters.py ─┐
+Kaggle CSVs ───────► backend/scripts/bulk_load.py (history)            ├─► Supabase Postgres
+Kaggle awards ─────► backend/ml/train_awards.py                        │         │
+GitHub Actions ───── scores /10 min · rosters /6 h · model+predict /3 h │         ▼
+                     awards + title odds daily                          Django REST (backend/api) ─► React/Vite (frontend)
 ```
 
-## Getting Started
+- **Backend**: Django + DRF. `api/v2.py` (pages), `api/ask.py` (natural-language search), `api/gm.py` (GM mode), `api/db.py` (pooled SQL, parallel queries, short TTL cache).
+- **ML**: `backend/ml/` — `features.py`, `train_game_model.py`, `predict_upcoming.py`, `award_features.py`, `train_awards.py`, `predict_awards.py`, `simulate_season.py`, `roster_model.py`.
+- **Frontend**: React 19 + Vite + React Query. `src/views/*`, shared kit in `src/ui/kit.jsx`, design tokens in `src/ui.css`.
+- **Data sources**: ESPN's public JSON API for live data (NBA's own endpoints block cloud IPs), Kaggle for history and awards, The Odds API for lines.
 
-See [SETUP.md](SETUP.md) for detailed installation and setup instructions.
+## Run it locally
 
-## Quick Start
-
-### Backend
 ```bash
-cd backend
-python -m venv venv
-source venv/Scripts/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python manage.py runserver
+# 1. repo-root .env  (see SETUP.md). The one that matters:
+#    DATABASE_URL=postgresql://postgres.<project-ref>:<password>@<region>.pooler.supabase.com:5432/postgres
+#    ODDS_API_KEY=...
+cd backend && pip install -r requirements.txt && python manage.py runserver 8000
 ```
 
-### Frontend
 ```bash
-cd frontend
-npm install
-npm run dev
+cd frontend && npm install && npm run dev      # http://localhost:5173, proxies /api to :8000
 ```
 
-## API Documentation
+Use the Supabase **session pooler** URI (IPv4, works from GitHub Actions). Encode special characters in the password (`@` → `%40`). The pooler allows 15 simultaneous clients in total, so the API keeps only 4–6 open.
 
-- **Games**: `/api/games/`
-- **Players**: `/api/players/`
-- **Predictions**: `/api/predictions/`
-- **WebSocket**: `ws://localhost:8000/ws/game/<game_id>/`
+## Data & model refresh
 
-## Contributing
+```bash
+python backend/scripts/bulk_load.py            # one-time history load (idempotent)
+python backend/scripts/sync_scores.py          # schedule, live scores, box scores (ESPN)
+python backend/scripts/sync_rosters.py         # rosters, contracts, injuries
+python backend/ml/train_game_model.py && python backend/ml/predict_upcoming.py
+python backend/ml/train_awards.py && python backend/ml/predict_awards.py
+python backend/ml/simulate_season.py
+python backend/ml/roster_model.py              # refit the GM roster model (writes roster_model.json)
+```
 
-1. Create a feature branch
-2. Make changes
-3. Test locally
-4. Commit with clear messages
-5. Push to main
+GitHub Actions run all of this on a schedule; they need a single repo secret, `DATABASE_URL` (the pooler URI, only the URI, no `DATABASE_URL=` prefix).
 
-## License
+## Tests
 
-MIT
+```bash
+cd backend && python -m unittest discover tests     # CBA trade rules + minutes allocation, no database needed
+```
+
+## GM Mode rules (simplified CBA)
+
+Thresholds are the 2025-26 official values +7% (editable in `api/gm.py`). Under the cap after the trade: always fine. Over the cap: incoming salary ≤ 200% of outgoing + $0.25M. Above the first apron: ≤ 110% + $0.1M. Above the second apron: ≤ 100% and no combining contracts. Recently signed players can't be traded. Roster ceiling is 21 (camp rosters), 13 minimum is a warning. Verify against the current CBA before relying on any edge case.
+
+See [SETUP.md](SETUP.md) for first-time setup.

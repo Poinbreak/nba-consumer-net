@@ -59,40 +59,23 @@ def series_table(r):
     return S
 
 
-def main(sims):
-    conn = connect()
-    g = pd.read_sql("""SELECT g.game_id, g.game_date, g.home_team_id, g.away_team_id, g.status,
-                              g.home_score, g.away_score, p.home_win_prob AS p
-                       FROM games g LEFT JOIN game_predictions p ON p.game_id = g.game_id AND p.model_type = 'static'
-                       WHERE g.game_id LIKE 'E%%' ORDER BY g.game_date""", conn)
-    teams = pd.read_sql("""SELECT team_id, abbreviation, conference FROM teams
-                           WHERE team_id BETWEEN 1610612737 AND 1610612766 ORDER BY team_id""", conn)
-    idx = {t: i for i, t in enumerate(teams['team_id'])}
-    n = len(teams)
-    g['h'], g['a'] = g['home_team_id'].map(idx), g['away_team_id'].map(idx)
-    done = g[g['status'] == 'Final']
-    sched = g[(g['status'] != 'Final') & g['p'].notna()].reset_index(drop=True)
-    if sched.empty:
-        print("nothing to simulate")
-        return
-    base, played = np.zeros(n), np.zeros(n)
-    for r in done.itertuples():
-        base[r.h if r.home_score > r.away_score else r.a] += 1
-        played[r.h] += 1
-        played[r.a] += 1
-
-    rating = fit_ratings(sched, n)
+def simulate(h, a, p, rating, conf, base, played, sims, seed=42, home_logit=HOME_LOGIT, logit_per_rating=1.0):
+    """Monte Carlo core, shared with GM Mode.
+    h, a: team indices of the remaining games; p: home win prob per game; rating: per-team logit strength
+    (used for playoff games + filling unscheduled games); conf: array of 'East'/'West'; base/played: current wins/games.
+    Returns (wins[sims, n], counts dict, total_games)."""
+    n = len(rating)
     S = series_table(rating)
 
-    def game_p(a, b):             # a hosts b
-        return sigmoid(rating[a] - rating[b] + HOME_LOGIT)
+    def game_p(x, y):             # x hosts y
+        return sigmoid(rating[x] - rating[y] + home_logit)
 
-    rng = np.random.default_rng(42)
-    G = len(sched)
-    outcome = rng.random((sims, G)) < sched['p'].astype(float).values[None, :]
+    rng = np.random.default_rng(seed)
+    G = len(h)
+    outcome = rng.random((sims, G)) < np.asarray(p, float)[None, :]
     Hm, Am = np.zeros((G, n)), np.zeros((G, n))
-    Hm[np.arange(G), sched['h'].values] = 1
-    Am[np.arange(G), sched['a'].values] = 1
+    Hm[np.arange(G), h] = 1
+    Am[np.arange(G), a] = 1
     wins = base[None, :] + outcome @ Hm + (~outcome) @ Am
     total_games = played + Hm.sum(0) + Am.sum(0)
     # ESPN publishes the tail of the schedule late: fill each team's missing games vs an average opponent
@@ -102,15 +85,14 @@ def main(sims):
             wins[:, i] += rng.binomial(missing[i], sigmoid(rating[i]), size=sims)
     total_games = total_games + missing
 
-    conf = teams['conference'].values
     groups = (np.where(conf == 'East')[0], np.where(conf == 'West')[0])
     cnt = {k: np.zeros(n) for k in ('playoffs', 'top_seed', 'conf_finals', 'finals', 'title')}
 
-    def play_game(a, b):
-        return a if rng.random() < game_p(a, b) else b
+    def play_game(x, y):
+        return x if rng.random() < game_p(x, y) else y
 
-    def series(a, b, w):          # more regular-season wins = home court
-        hi, lo = (a, b) if w[a] >= w[b] else (b, a)
+    def series(x, y, w):          # more regular-season wins = home court
+        hi, lo = (x, y) if w[x] >= w[y] else (y, x)
         return hi if rng.random() < S[hi, lo] else lo
 
     for s in range(sims):
@@ -134,6 +116,35 @@ def main(sims):
         for t in champs:
             cnt['finals'][t] += 1
         cnt['title'][series(champs[0], champs[1], w)] += 1
+    return wins, cnt, total_games
+
+
+def main(sims):
+    conn = connect()
+    g = pd.read_sql("""SELECT g.game_id, g.game_date, g.home_team_id, g.away_team_id, g.status,
+                              g.home_score, g.away_score, p.home_win_prob AS p
+                       FROM games g LEFT JOIN game_predictions p ON p.game_id = g.game_id AND p.model_type = 'static'
+                       WHERE g.game_id LIKE 'E%%' ORDER BY g.game_date""", conn)
+    teams = pd.read_sql("""SELECT team_id, abbreviation, conference FROM teams
+                           WHERE team_id BETWEEN 1610612737 AND 1610612766 ORDER BY team_id""", conn)
+    idx = {t: i for i, t in enumerate(teams['team_id'])}
+    n = len(teams)
+    g['h'], g['a'] = g['home_team_id'].map(idx), g['away_team_id'].map(idx)
+    done = g[g['status'] == 'Final']
+    sched = g[(g['status'] != 'Final') & g['p'].notna()].reset_index(drop=True)
+    if sched.empty:
+        print("nothing to simulate")
+        return
+    base, played = np.zeros(n), np.zeros(n)
+    for r in done.itertuples():
+        base[r.h if r.home_score > r.away_score else r.a] += 1
+        played[r.h] += 1
+        played[r.a] += 1
+
+    conf = teams['conference'].values
+    rating = fit_ratings(sched, n)
+    wins, cnt, total_games = simulate(sched['h'].values, sched['a'].values, sched['p'].astype(float).values,
+                                      rating, conf, base, played, sims)
 
     exp_w = wins.mean(0)
     cur = conn.cursor()

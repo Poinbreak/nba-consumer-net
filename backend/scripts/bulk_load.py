@@ -19,12 +19,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env'))
 DATA_DIR = os.path.join(os.path.dirname(__file__), '../data')
 
 
-def connect():
-    return psycopg2.connect(
-        host=os.environ['SUPABASE_DB_HOST'], port=os.environ['SUPABASE_DB_PORT'],
-        dbname=os.environ['SUPABASE_DB_NAME'], user=os.environ.get('SUPABASE_DB_USER', 'postgres'),
-        password=os.environ['SUPABASE_DB_PASSWORD'], sslmode='require',
-    )
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../ml'))
+from features import connect  # noqa: E402  (DATABASE_URL-aware, shared with every other script)
 
 
 def copy_upsert(conn, df, table, cols, conflict):
@@ -53,6 +49,19 @@ def fill_game_type(df):
     """Kaggle leaves gameType blank on many rows; the NBA game id's first digit encodes it."""
     guess = df['game_id'].astype(str).str[0].map(GAME_TYPE_BY_PREFIX)
     df['game_type'] = df['game_type'].fillna(guess)
+    return df
+
+
+def fill_team_ids(df, id_col, city_col, name_col):
+    """Kaggle leaves team ids blank for some seasons (all of 2021-22) but keeps city + nickname: rebuild ids from
+    the (city, nickname) -> id pairs seen on rows that do have them."""
+    known = df[df[id_col].notna()][[city_col, name_col, id_col]].drop_duplicates()
+    by_pair = {(c, n): int(i) for c, n, i in known.itertuples(index=False)}
+    by_name = {n: int(i) for _, n, i in known.itertuples(index=False)}
+    missing = df[id_col].isna()
+    mapped = pd.Series([by_pair.get((c, n), by_name.get(n)) for c, n in zip(df.loc[missing, city_col], df.loc[missing, name_col])],
+                       index=df.index[missing], dtype='float64')
+    df[id_col] = df[id_col].astype('float64').fillna(mapped)
     return df
 
 
@@ -134,6 +143,8 @@ def load_player_stats(conn):
     games, teams, players = known_ids(conn)
     df = pd.read_csv(os.path.join(DATA_DIR, 'PlayerStatistics.csv'), low_memory=False)
     df['game_id'] = df['gameId'].astype(str)
+    df = fill_team_ids(df, 'playerteamId', 'playerteamCity', 'playerteamName')
+    df = fill_team_ids(df, 'opponentteamId', 'opponentteamCity', 'opponentteamName')
     df = df[df['game_id'].isin(games) & df['personId'].isin(players)]
     df = df[df['playerteamId'].isin(teams) & df['opponentteamId'].isin(teams)]
     df['numMinutes'] = pd.to_numeric(df['numMinutes'], errors='coerce')
