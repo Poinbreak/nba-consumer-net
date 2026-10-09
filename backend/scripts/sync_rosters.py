@@ -44,7 +44,10 @@ def main():
                    ORDER BY EXISTS (SELECT 1 FROM player_game_logs l WHERE l.player_id=p.player_id AND l.game_date > '2024-10-01')""")
     by_name = {norm(n): i for i, n in cur.fetchall()}   # players with recent logs win name collisions
 
-    cur.execute("UPDATE players SET team_id = NULL, is_active = FALSE")
+    cur.execute("SELECT espn_id, player_id FROM players WHERE espn_id IS NOT NULL")
+    by_espn_id = dict(cur.fetchall())                    # ESPN's id is authoritative once we have seen a player
+    used = set()
+    cur.execute("UPDATE players SET team_id = NULL, is_active = FALSE, espn_id = NULL")
     cur.execute("DELETE FROM injuries")
     roster, season_year = [], None
     for t in espn_teams:
@@ -56,7 +59,9 @@ def main():
         season_year = season_year or r.get('season', {}).get('year')
         for a in r['athletes']:
             eid = int(a['id'])
-            pid = by_name.get(norm(a['fullName']))
+            pid = by_espn_id.get(eid) or by_name.get(norm(a['fullName']))
+            if pid in used:                              # two ESPN athletes, one DB name: keep them separate
+                pid = None
             pos = (a.get('position') or {}).get('abbreviation')
             vals = dict(team_id=tid, position=pos, age=a.get('age'), jersey_number=a.get('jersey'),
                         espn_id=eid, height_in=a.get('height'), weight_lb=a.get('weight'),
@@ -67,6 +72,7 @@ def main():
                 pid = 1_000_000_000 + eid
                 cur.execute("INSERT INTO players (player_id, full_name) VALUES (%s,%s) ON CONFLICT DO NOTHING",
                             (pid, a['fullName']))
+            used.add(pid)
             cur.execute("""UPDATE players SET team_id=%(team_id)s, position=%(position)s, age=%(age)s,
                            jersey_number=%(jersey_number)s, is_active=TRUE, espn_id=%(espn_id)s,
                            height_in=%(height_in)s, weight_lb=%(weight_lb)s, headshot_url=%(headshot_url)s,
