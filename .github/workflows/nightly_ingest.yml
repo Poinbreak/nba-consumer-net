@@ -1,22 +1,28 @@
 name: Nightly NBA Data Ingest
 on:
   schedule:
-    - cron: '0 8 * * *'      # 3 AM EST = 8 AM UTC
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: nba-db-writes
+  cancel-in-progress: false
+
 jobs:
-  ingest:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Dependencies
-        run: pip install -r backend/requirements.txt
-      - name: Run Nightly Ingest
-        run: python backend/scripts/nightly_ingest.py
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          cache: pip
+          cache-dependency-path: backend/requirements-ci.txt
+      - run: pip install -r backend/requirements-ci.txt
+      - name: Backfill last 5 days of results
+        run: python backend/scripts/sync_scores.py --back 5 --ahead 30
+      - name: Sync rosters
+        run: python backend/scripts/sync_rosters.py

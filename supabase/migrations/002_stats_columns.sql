@@ -21,9 +21,13 @@ ALTER TABLE team_game_stats
     ADD COLUMN IF NOT EXISTS game_date       DATE,
     ADD COLUMN IF NOT EXISTS game_type       VARCHAR(20);
 
--- Unique constraint so upsert works
-ALTER TABLE team_game_stats
-    ADD CONSTRAINT IF NOT EXISTS team_game_stats_game_team_uq UNIQUE (game_id, team_id);
+-- Unique constraint so upsert works (Postgres has no "ADD CONSTRAINT IF NOT EXISTS")
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'team_game_stats_game_team_uq') THEN
+        ALTER TABLE team_game_stats ADD CONSTRAINT team_game_stats_game_team_uq UNIQUE (game_id, team_id);
+    END IF;
+END $$;
 
 -- player_game_logs additions
 ALTER TABLE player_game_logs
@@ -45,11 +49,17 @@ ALTER TABLE player_game_logs
 ALTER TABLE player_game_logs
     ADD COLUMN IF NOT EXISTS min_played      NUMERIC(5,2);
 
--- Unique constraint so upsert works  
-ALTER TABLE player_game_logs
-    ADD CONSTRAINT IF NOT EXISTS player_game_logs_game_player_uq UNIQUE (game_id, player_id);
+-- Unique constraint so upsert works (Postgres has no "ADD CONSTRAINT IF NOT EXISTS")
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'player_game_logs_game_player_uq') THEN
+        ALTER TABLE player_game_logs ADD CONSTRAINT player_game_logs_game_player_uq UNIQUE (game_id, player_id);
+    END IF;
+END $$;
 
--- Also add a view for quick season averages per player (last 10 games)
+-- Also add a view for quick season averages per player.
+-- Anchored to the latest loaded game_date (not CURRENT_DATE) since this is a finite historical
+-- dataset, not a live feed -- a wall-clock-relative window would go empty during any offseason.
 CREATE OR REPLACE VIEW player_season_avgs AS
 SELECT
     p.player_id,
@@ -66,10 +76,10 @@ SELECT
     COUNT(*)                          AS games_played
 FROM player_game_logs gl
 JOIN players p ON p.player_id = gl.player_id
-WHERE gl.game_date >= CURRENT_DATE - INTERVAL '90 days'
+WHERE gl.game_date >= (SELECT MAX(game_date) FROM player_game_logs) - INTERVAL '90 days'
 GROUP BY p.player_id, p.full_name, p.team_id;
 
--- Season averages per team
+-- Season averages per team (same anchoring rationale as player_season_avgs above)
 CREATE OR REPLACE VIEW team_season_avgs AS
 SELECT
     t.team_id,
@@ -86,5 +96,5 @@ SELECT
     COUNT(*) AS games_played
 FROM team_game_stats tgs
 JOIN teams t ON t.team_id = tgs.team_id
-WHERE tgs.game_date >= CURRENT_DATE - INTERVAL '180 days'
+WHERE tgs.game_date >= (SELECT MAX(game_date) FROM team_game_stats) - INTERVAL '180 days'
 GROUP BY t.team_id, t.abbreviation, t.full_name;

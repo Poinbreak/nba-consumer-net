@@ -25,11 +25,11 @@ def clean_records(records):
     return [{k: clean(v) for k, v in r.items()} for r in records]
 
 
-def upsert(table, records, chunk=500):
+def upsert(table, records, chunk=500, on_conflict=None):
     records = clean_records(records)
     total = len(records)
     for i in range(0, total, chunk):
-        supabase.table(table).upsert(records[i:i+chunk]).execute()
+        supabase.table(table).upsert(records[i:i+chunk], on_conflict=on_conflict).execute()
         print(f"  {min(i+chunk, total)}/{total}")
 
 
@@ -96,7 +96,7 @@ def load_team_stats():
         })
 
     print(f"  Inserting {len(records)} team game rows …")
-    upsert('team_game_stats', records)
+    upsert('team_game_stats', records, on_conflict='game_id,team_id')
 
 
 # ── 2. player_game_logs ─────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ def load_player_stats():
         })
 
     print(f"  Inserting {len(records)} player game rows …")
-    upsert('player_game_logs', records, chunk=300)
+    upsert('player_game_logs', records, chunk=300, on_conflict='game_id,player_id')
 
 
 if __name__ == '__main__':
