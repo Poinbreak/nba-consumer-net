@@ -1,31 +1,30 @@
-name: Model Retraining Pipeline
+name: Awards and Title Odds
 on:
   schedule:
-    - cron: '0 0 * * 1'      # Every Monday at midnight
+    - cron: '0 9 * * *'      # daily, after the overnight score sync
   workflow_dispatch:
 
+concurrency:
+  group: nba-db-writes
+  cancel-in-progress: false
+
 jobs:
-  retrain:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Dependencies
-        run: pip install -r backend/requirements.txt
-      - name: Retrain Game Model
-        run: python backend/ml/train_game_model.py
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-      - name: Retrain Player Props Model
-        run: python backend/ml/train_player_props.py
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-      - name: Retrain Awards Model
+          cache: pip
+          cache-dependency-path: backend/requirements-ci.txt
+      - run: pip install -r backend/requirements-ci.txt
+      - name: Retrain award models (Basketball-Reference history via Kaggle)
         run: python backend/ml/train_awards.py
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      - name: Score current award races
+        run: python backend/ml/predict_awards.py
+      - name: Simulate season (win totals, playoff and title odds)
+        run: python backend/ml/simulate_season.py --sims 5000

@@ -46,6 +46,16 @@ def copy_upsert(conn, df, table, cols, conflict):
     print(f"  {table}: inserted {n} of {len(df)} rows")
 
 
+GAME_TYPE_BY_PREFIX = {'1': 'Preseason', '2': 'Regular Season', '3': 'All-Star Game', '4': 'Playoffs', '5': 'Play-in Tournament'}
+
+
+def fill_game_type(df):
+    """Kaggle leaves gameType blank on many rows; the NBA game id's first digit encodes it."""
+    guess = df['game_id'].astype(str).str[0].map(GAME_TYPE_BY_PREFIX)
+    df['game_type'] = df['game_type'].fillna(guess)
+    return df
+
+
 def known_ids(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT game_id FROM games")
@@ -115,7 +125,7 @@ def load_team_stats(conn):
         out[c] = pd.to_numeric(out[c], errors='coerce').round().astype('Int64')
     out['is_home'] = out['is_home'].map({True: 't', False: 'f'})
     out['win'] = out['win'].map({True: 't', False: 'f'})
-    out = out.drop_duplicates(['game_id', 'team_id'])
+    out = fill_game_type(out.drop_duplicates(['game_id', 'team_id']))
     copy_upsert(conn, out, 'team_game_stats', list(out.columns), 'game_id, team_id')
 
 
@@ -152,7 +162,7 @@ def load_player_stats(conn):
     out['is_started'] = out['is_started'].map({True: 't', False: 'f'})
     for c in ['pts', 'reb', 'ast', 'stl', 'blk', 'tov', 'fgm', 'fga', 'fg3m', 'fg3a', 'ftm', 'fta', 'oreb', 'dreb', 'pf']:
         out[c] = pd.to_numeric(out[c], errors='coerce').round().astype('Int64')
-    out = out.drop_duplicates(['game_id', 'player_id'])
+    out = fill_game_type(out.drop_duplicates(['game_id', 'player_id']))
     for i in range(0, len(out), 100_000):
         copy_upsert(conn, out.iloc[i:i + 100_000], 'player_game_logs', list(out.columns), 'game_id, player_id')
 

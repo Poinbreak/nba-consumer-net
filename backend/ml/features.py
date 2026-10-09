@@ -33,7 +33,8 @@ def load_team_games(conn=None):
     conn = conn or connect()
     df = pd.read_sql(
         "SELECT game_id, team_id, opp_team_id, is_home, win, game_date, game_type, pts, opp_pts, "
-        + ", ".join(ROLL_COLS) + " FROM team_game_stats ORDER BY game_date, game_id", conn)
+        + ", ".join(ROLL_COLS) + " FROM team_game_stats "
+        "WHERE COALESCE(game_type, '') NOT IN ('Preseason', 'All-Star Game') ORDER BY game_date, game_id", conn)
     df['game_date'] = pd.to_datetime(df['game_date'])
     for c in ROLL_COLS + ['pts', 'opp_pts']:
         df[c] = df[c].astype(float)
